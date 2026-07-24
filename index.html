@@ -2,7 +2,6 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <!-- スマホ用の画面表示とズーム（ダブルタップ拡大）防止の指定 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>3D鋼材寸法シミュレーター（L字 / コの字）</title>
   <style>
@@ -10,7 +9,6 @@
       margin: 0;
       overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      /* iPhoneの引っ張り更新やスクロールによる余計な挙動を防止 */
       touch-action: none;
     }
     #ui-panel {
@@ -23,7 +21,6 @@
       box-shadow: 0 4px 6px rgba(0,0,0,0.3);
       width: 240px;
       z-index: 10;
-      /* スマホのキーボード操作やタップをスムーズにする設定 */
       touch-action: auto;
     }
     .shape-selector {
@@ -63,7 +60,7 @@
     .input-group input {
       width: 100px;
       padding: 6px;
-      font-size: 16px; /* ★重要: iOS Safariで勝手に画面がズームインするのを防ぐ16px以上指定 */
+      font-size: 16px;
       border: 1px solid #ccc;
       border-radius: 4px;
       box-sizing: border-box;
@@ -76,7 +73,8 @@
     }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- ★全方向360度回転に対応した TrackballControls を読み込み -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TrackballControls.js"></script>
 </head>
 <body>
 
@@ -116,7 +114,8 @@
   </div>
 
   <div class="note">
-    ※ 1本指で回転、2本指で移動・拡大
+    ※ 縦横全方向360度フリースピン回転<br>
+    ※ 2本指で移動・拡大縮小
   </div>
 </div>
 
@@ -128,12 +127,19 @@
   camera.position.set(250, 250, 400);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // ★スマホの超高画質による重化防止
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   document.body.appendChild(renderer.domElement);
 
-  const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
+  // ★ TrackballControls を設定（制限なしの全方向回転が可能）
+  const controls = new THREE.TrackballControls(camera, renderer.domElement);
+  controls.rotateSpeed = 3.0; // 回転感度
+  controls.zoomSpeed = 1.2;   // ズーム感度
+  controls.panSpeed = 0.8;    // 移動感度
+  controls.noZoom = false;
+  controls.noPan = false;
+  controls.staticMoving = false;
+  controls.dynamicDampingFactor = 0.15; // なめらかな慣性
 
   // ライティング
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -164,7 +170,6 @@
 
   const materials = [whiteMaterial, blueMaterial];
 
-  // ★要調整機能: 正しい数値を取得するための安全関数
   function getValidValue(id, defaultValue) {
     const el = document.getElementById(id);
     if (!el) return defaultValue;
@@ -172,7 +177,6 @@
     return (isNaN(val) || val <= 0) ? defaultValue : val;
   }
 
-  // ★要調整機能: 完全なメモリ破棄ロジック（iOSのクラッシュ防止）
   function clearGroup(group) {
     while (group.children.length > 0) {
       const obj = group.children[0];
@@ -189,7 +193,7 @@
   }
 
   function buildModel() {
-    clearGroup(shapeGroup); // メモリ破棄を実行
+    clearGroup(shapeGroup);
 
     const isL = document.getElementById('typeL').checked;
     const shape = new THREE.Shape();
@@ -301,11 +305,9 @@
     buildModel();
   }
 
-  // ★重要: モバイルで連打・文字削除された時の処理軽減（Debounce処理）
   let timer = null;
   function onInputHandler() {
     clearTimeout(timer);
-    // 入力が止まってから0.1秒後に1回だけ再描画（これで動作が劇的に軽くなります）
     timer = setTimeout(() => {
       buildModel();
     }, 100);
@@ -314,7 +316,6 @@
   document.getElementById('typeL').addEventListener('change', updateUI);
   document.getElementById('typeU').addEventListener('change', updateUI);
   
-  // 入力イベントの最適化
   ['inputA', 'inputB', 'inputC', 'inputD', 'inputT'].forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('input', onInputHandler);
@@ -324,7 +325,7 @@
 
   function animate() {
     requestAnimationFrame(animate);
-    controls.update();
+    controls.update(); // TrackballControlsの毎フレーム更新
     renderer.render(scene, camera);
   }
   animate();
@@ -333,6 +334,7 @@
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    controls.handleResize(); // リサイズ時の制御更新
   });
 </script>
 
