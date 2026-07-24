@@ -10,6 +10,9 @@
       overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       touch-action: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
     }
     #ui-panel {
       position: absolute;
@@ -73,8 +76,6 @@
     }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <!-- ★全方向360度回転に対応した TrackballControls を読み込み -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TrackballControls.js"></script>
 </head>
 <body>
 
@@ -114,8 +115,8 @@
   </div>
 
   <div class="note">
-    ※ 縦横全方向360度フリースピン回転<br>
-    ※ 2本指で移動・拡大縮小
+    ※ 1本指ドラッグ: 360度全方向回転<br>
+    ※ 2本指ピンチ: 拡大・縮小
   </div>
 </div>
 
@@ -124,22 +125,12 @@
   scene.background = new THREE.Color(0x222222);
 
   const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 10000);
-  camera.position.set(250, 250, 400);
+  camera.position.set(0, 0, 500);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   document.body.appendChild(renderer.domElement);
-
-  // ★ TrackballControls を設定（制限なしの全方向回転が可能）
-  const controls = new THREE.TrackballControls(camera, renderer.domElement);
-  controls.rotateSpeed = 3.0; // 回転感度
-  controls.zoomSpeed = 1.2;   // ズーム感度
-  controls.panSpeed = 0.8;    // 移動感度
-  controls.noZoom = false;
-  controls.noPan = false;
-  controls.staticMoving = false;
-  controls.dynamicDampingFactor = 0.15; // なめらかな慣性
 
   // ライティング
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -153,8 +144,12 @@
   dirLight2.position.set(-200, -100, -200);
   scene.add(dirLight2);
 
+  // 回転専用の親グループ（全方向フリースピン対応）
+  const rotateGroup = new THREE.Group();
+  scene.add(rotateGroup);
+
   let shapeGroup = new THREE.Group();
-  scene.add(shapeGroup);
+  rotateGroup.add(shapeGroup);
 
   const blueMaterial = new THREE.MeshStandardMaterial({
     color: 0x1e88e5,
@@ -170,6 +165,107 @@
 
   const materials = [whiteMaterial, blueMaterial];
 
+  // -------------------------------------------------------------
+  // ★ iPhone/iOS向け 安定動作タッチ・マウス操作ロジック
+  // -------------------------------------------------------------
+  let isPointerDown = false;
+  let previousTouchPosition = { x: 0, y: 0 };
+  let initialPinchDistance = null;
+  let initialCameraZ = 500;
+
+  const dom = renderer.domElement;
+
+  function getTouchDist(e) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  // ポインター押下
+  function onPointerStart(e) {
+    if (e.target.closest('#ui-panel')) return; // UI操作時はカメラ動かさない
+    isPointerDown = true;
+
+    if (e.touches && e.touches.length === 1) {
+      previousTouchPosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches && e.touches.length === 2) {
+      initialPinchDistance = getTouchDist(e);
+      initialCameraZ = camera.position.z;
+    } else if (!e.touches) {
+      previousTouchPosition = { x: e.clientX, y: e.clientY };
+    }
+  }
+
+  // ポインター移動（全方向360度回転）
+  function onPointerMove(e) {
+    if (!isPointerDown) return;
+    if (e.target.closest('#ui-panel')) return;
+
+    if (e.touches && e.touches.length === 1) {
+      const deltaX = e.touches[0].clientX - previousTouchPosition.x;
+      const deltaY = e.touches[0].clientY - previousTouchPosition.y;
+
+      // クォータニオンによる全方向360度スムーズ回転
+      const deltaRotationQuaternion = new THREE.Quaternion()
+        .setFromEuler(new THREE.Euler(
+          deltaY * 0.008,
+          deltaX * 0.008,
+          0,
+          'XYZ'
+        ));
+
+      rotateGroup.quaternion.multiplyQuaternions(deltaRotationQuaternion, rotateGroup.quaternion);
+      previousTouchPosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+
+    } else if (e.touches && e.touches.length === 2 && initialPinchDistance) {
+      // 2本指ピンチイン・アウト（拡大縮小）
+      const currentDist = getTouchDist(e);
+      const factor = initialPinchDistance / currentDist;
+      camera.position.z = Math.max(100, Math.min(2000, initialCameraZ * factor));
+
+    } else if (!e.touches) {
+      // マウス操作
+      const deltaX = e.clientX - previousTouchPosition.x;
+      const deltaY = e.clientY - previousTouchPosition.y;
+
+      const deltaRotationQuaternion = new THREE.Quaternion()
+        .setFromEuler(new THREE.Euler(
+          deltaY * 0.008,
+          deltaX * 0.008,
+          0,
+          'XYZ'
+        ));
+
+      rotateGroup.quaternion.multiplyQuaternions(deltaRotationQuaternion, rotateGroup.quaternion);
+      previousTouchPosition = { x: e.clientX, y: e.clientY };
+    }
+  }
+
+  function onPointerEnd() {
+    isPointerDown = false;
+    initialPinchDistance = null;
+  }
+
+  // ホイール拡大縮小（PC用）
+  window.addEventListener('wheel', (e) => {
+    if (e.target.closest('#ui-panel')) return;
+    camera.position.z = Math.max(100, Math.min(2000, camera.position.z + e.deltaY * 0.5));
+  }, { passive: true });
+
+  // タッチイベント登録
+  dom.addEventListener('touchstart', onPointerStart, { passive: true });
+  dom.addEventListener('touchmove', onPointerMove, { passive: true });
+  dom.addEventListener('touchend', onPointerEnd, { passive: true });
+  dom.addEventListener('touchcancel', onPointerEnd, { passive: true });
+
+  // マウスイベント登録
+  dom.addEventListener('mousedown', onPointerStart);
+  window.addEventListener('mousemove', onPointerMove);
+  window.addEventListener('mouseup', onPointerEnd);
+
+  // -------------------------------------------------------------
+  // 3Dモデル生成処理
+  // -------------------------------------------------------------
   function getValidValue(id, defaultValue) {
     const el = document.getElementById(id);
     if (!el) return defaultValue;
@@ -325,7 +421,6 @@
 
   function animate() {
     requestAnimationFrame(animate);
-    controls.update(); // TrackballControlsの毎フレーム更新
     renderer.render(scene, camera);
   }
   animate();
@@ -334,7 +429,6 @@
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    controls.handleResize(); // リサイズ時の制御更新
   });
 </script>
 
