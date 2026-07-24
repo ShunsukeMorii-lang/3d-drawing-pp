@@ -2,12 +2,16 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <!-- スマホ用の画面表示とズーム（ダブルタップ拡大）防止の指定 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>3D鋼材寸法シミュレーター（L字 / コの字）</title>
   <style>
     body {
       margin: 0;
       overflow: hidden;
-      font-family: sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      /* iPhoneの引っ張り更新やスクロールによる余計な挙動を防止 */
+      touch-action: none;
     }
     #ui-panel {
       position: absolute;
@@ -19,6 +23,8 @@
       box-shadow: 0 4px 6px rgba(0,0,0,0.3);
       width: 240px;
       z-index: 10;
+      /* スマホのキーボード操作やタップをスムーズにする設定 */
+      touch-action: auto;
     }
     .shape-selector {
       display: flex;
@@ -32,7 +38,7 @@
       font-weight: bold;
       cursor: pointer;
       font-size: 14px;
-      padding: 4px 12px;
+      padding: 6px 12px;
       border-radius: 4px;
     }
     .shape-selector input {
@@ -42,7 +48,7 @@
       background: #1e88e5;
       color: white;
       border-radius: 4px;
-      padding: 4px 12px;
+      padding: 6px 12px;
     }
     .input-group {
       margin-bottom: 10px;
@@ -56,8 +62,8 @@
     }
     .input-group input {
       width: 100px;
-      padding: 5px;
-      font-size: 14px;
+      padding: 6px;
+      font-size: 16px; /* ★重要: iOS Safariで勝手に画面がズームインするのを防ぐ16px以上指定 */
       border: 1px solid #ccc;
       border-radius: 4px;
       box-sizing: border-box;
@@ -77,7 +83,6 @@
 <div id="ui-panel">
   <h3 style="margin-top:0; margin-bottom:10px;">3D図面シミュレーター</h3>
   
-  <!-- 形状選択タブ -->
   <div class="shape-selector">
     <label>
       <input type="radio" name="shapeType" value="L" checked id="typeL">
@@ -89,43 +94,41 @@
     </label>
   </div>
 
-  <!-- 寸法入力フォーム -->
   <div class="input-group">
     <label for="inputA" id="labelA">A (縦mm):</label>
-    <input type="number" id="inputA" value="100" min="1" step="1">
+    <input type="number" id="inputA" value="100" min="1" step="1" inputmode="decimal">
   </div>
   <div class="input-group">
     <label for="inputB" id="labelB">B (横mm):</label>
-    <input type="number" id="inputB" value="100" min="1" step="1">
+    <input type="number" id="inputB" value="100" min="1" step="1" inputmode="decimal">
   </div>
   <div class="input-group" id="groupC">
     <label for="inputC" id="labelC">C (奥行mm):</label>
-    <input type="number" id="inputC" value="200" min="1" step="1">
+    <input type="number" id="inputC" value="200" min="1" step="1" inputmode="decimal">
   </div>
   <div class="input-group" id="groupD" style="display: none;">
     <label for="inputD" id="labelD">D (奥行mm):</label>
-    <input type="number" id="inputD" value="200" min="1" step="1">
+    <input type="number" id="inputD" value="200" min="1" step="1" inputmode="decimal">
   </div>
   <div class="input-group">
     <label for="inputT">t (板厚mm):</label>
-    <input type="number" id="inputT" value="3" min="0.1" step="0.1">
+    <input type="number" id="inputT" value="3" min="0.1" step="0.1" inputmode="decimal">
   </div>
 
   <div class="note">
-    ※ ドラッグで360度回転<br>
-    ※ ホイールで拡大・縮小
+    ※ 1本指で回転、2本指で移動・拡大
   </div>
 </div>
 
 <script>
-  // 1. シーン・カメラ・レンダラーの準備
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x222222);
 
   const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 10000);
   camera.position.set(250, 250, 400);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // ★スマホの超高画質による重化防止
   renderer.setSize(window.innerWidth, window.innerHeight);
   document.body.appendChild(renderer.domElement);
 
@@ -147,7 +150,6 @@
   let shapeGroup = new THREE.Group();
   scene.add(shapeGroup);
 
-  // 共通マテリアル設定（正面・背面＝青色、側面＝白色）
   const blueMaterial = new THREE.MeshStandardMaterial({
     color: 0x1e88e5,
     roughness: 0.3,
@@ -162,14 +164,32 @@
 
   const materials = [whiteMaterial, blueMaterial];
 
-  // 2. 3Dモデル生成メイン処理
-  function buildModel() {
-    // 既存オブジェクトのクリア
-    while(shapeGroup.children.length > 0){ 
-      const obj = shapeGroup.children[0];
-      obj.geometry.dispose();
-      shapeGroup.remove(obj); 
+  // ★要調整機能: 正しい数値を取得するための安全関数
+  function getValidValue(id, defaultValue) {
+    const el = document.getElementById(id);
+    if (!el) return defaultValue;
+    const val = parseFloat(el.value);
+    return (isNaN(val) || val <= 0) ? defaultValue : val;
+  }
+
+  // ★要調整機能: 完全なメモリ破棄ロジック（iOSのクラッシュ防止）
+  function clearGroup(group) {
+    while (group.children.length > 0) {
+      const obj = group.children[0];
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) {
+        if (Array.isArray(obj.material)) {
+          obj.material.forEach(m => m.dispose());
+        } else {
+          obj.material.dispose();
+        }
+      }
+      group.remove(obj);
     }
+  }
+
+  function buildModel() {
+    clearGroup(shapeGroup); // メモリ破棄を実行
 
     const isL = document.getElementById('typeL').checked;
     const shape = new THREE.Shape();
@@ -177,11 +197,10 @@
     let innerEdges = [];
 
     if (isL) {
-      // --- L字形状の定義 ---
-      let A = parseFloat(document.getElementById('inputA').value) || 10;
-      let B = parseFloat(document.getElementById('inputB').value) || 10;
-      let C = parseFloat(document.getElementById('inputC').value) || 10;
-      let t = parseFloat(document.getElementById('inputT').value) || 1;
+      let A = getValidValue('inputA', 100);
+      let B = getValidValue('inputB', 100);
+      let C = getValidValue('inputC', 200);
+      let t = getValidValue('inputT', 3);
 
       if (t >= A) t = A - 1;
       if (t >= B) t = B - 1;
@@ -190,23 +209,21 @@
       shape.moveTo(0, 0);
       shape.lineTo(B, 0);
       shape.lineTo(B, t);
-      shape.lineTo(t, t);  // 内角
+      shape.lineTo(t, t);
       shape.lineTo(t, A);
       shape.lineTo(0, A);
       shape.closePath();
 
-      // 内角隠れ線（1本）
       const innerX = t - (B / 2);
       const innerY = t - (A / 2);
       innerEdges.push({ x: innerX, y: innerY });
 
     } else {
-      // --- コの字形状の定義 ---
-      let A = parseFloat(document.getElementById('inputA').value) || 10; // 左縦
-      let B = parseFloat(document.getElementById('inputB').value) || 10; // 右縦
-      let C = parseFloat(document.getElementById('inputC').value) || 10; // 底辺横
-      let D = parseFloat(document.getElementById('inputD').value) || 10; // 奥行
-      let t = parseFloat(document.getElementById('inputT').value) || 1;
+      let A = getValidValue('inputA', 100);
+      let B = getValidValue('inputB', 100);
+      let C = getValidValue('inputC', 200);
+      let D = getValidValue('inputD', 200);
+      let t = getValidValue('inputT', 3);
 
       if (t >= A) t = A - 1;
       if (t >= B) t = B - 1;
@@ -217,13 +234,12 @@
       shape.lineTo(C, 0);
       shape.lineTo(C, B);
       shape.lineTo(C - t, B);
-      shape.lineTo(C - t, t); // 右内角
-      shape.lineTo(t, t);     // 左内角
+      shape.lineTo(C - t, t);
+      shape.lineTo(t, t);
       shape.lineTo(t, A);
       shape.lineTo(0, A);
       shape.closePath();
 
-      // 内角隠れ線（左と右の2本）
       const leftInnerX = t - (C / 2);
       const leftInnerY = t - (Math.max(A, B) / 2);
       const rightInnerX = (C - t) - (C / 2);
@@ -233,7 +249,6 @@
       innerEdges.push({ x: rightInnerX, y: rightInnerY });
     }
 
-    // 3D押し出し
     const geometry = new THREE.ExtrudeGeometry(shape, {
       depth: depth,
       bevelEnabled: false
@@ -243,13 +258,12 @@
     const mesh = new THREE.Mesh(geometry, materials);
     shapeGroup.add(mesh);
 
-    // --- 内角エッジライン（透過点線）の描画 ---
     const halfDepth = depth / 2;
     const lineMaterial = new THREE.LineDashedMaterial({
-      color: 0xffeb3b,    // 黄色の点線
+      color: 0xffeb3b,
       dashSize: 5,
       gapSize: 3,
-      depthTest: false,   // 背面時も透過
+      depthTest: false,
       transparent: true,
       opacity: 0.8
     });
@@ -266,7 +280,6 @@
     });
   }
 
-  // 3. UIの切り替え制御
   function updateUI() {
     const isL = document.getElementById('typeL').checked;
     
@@ -288,20 +301,27 @@
     buildModel();
   }
 
-  // イベントリスナー登録
+  // ★重要: モバイルで連打・文字削除された時の処理軽減（Debounce処理）
+  let timer = null;
+  function onInputHandler() {
+    clearTimeout(timer);
+    // 入力が止まってから0.1秒後に1回だけ再描画（これで動作が劇的に軽くなります）
+    timer = setTimeout(() => {
+      buildModel();
+    }, 100);
+  }
+
   document.getElementById('typeL').addEventListener('change', updateUI);
   document.getElementById('typeU').addEventListener('change', updateUI);
   
-  document.getElementById('inputA').addEventListener('input', buildModel);
-  document.getElementById('inputB').addEventListener('input', buildModel);
-  document.getElementById('inputC').addEventListener('input', buildModel);
-  document.getElementById('inputD').addEventListener('input', buildModel);
-  document.getElementById('inputT').addEventListener('input', buildModel);
+  // 入力イベントの最適化
+  ['inputA', 'inputB', 'inputC', 'inputD', 'inputT'].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', onInputHandler);
+  });
 
-  // 初期描画
   updateUI();
 
-  // 4. アニメーションループ
   function animate() {
     requestAnimationFrame(animate);
     controls.update();
